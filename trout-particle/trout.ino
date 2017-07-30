@@ -17,7 +17,7 @@ int mqtt_status = 0;
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     char p[length + 1];
     memcpy(p, payload, length);
-    p[length] = NULL;
+    p[length] = '\0';
     String message(p);
 
     //Do something with String message?
@@ -58,9 +58,9 @@ void loopMqtt() {
 // curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/events
 
 #define TTL 5
+#define LED D0
+#define MOTION_SENSOR A0
 
-int LED = D0;
-int MOTION_SENSOR = A0;
 int state = LOW;
 int reset_time = 0;
 int debounce_time = 0;
@@ -83,7 +83,7 @@ void loopMotion() {
 				reset_time = now + TTL;
 				if (motion == 0) {
 					Particle.publish("motion", "1", TTL, PRIVATE);
-					mqttClient.publish("devices/trout/motion", "1");
+					mqttClient.publish("devices/trout/motion", "active");
 					motion = 1;
 				}
 				digitalWrite(LED, HIGH);
@@ -96,8 +96,8 @@ void loopMotion() {
 
     if (now > reset_time) {
         if (motion == 1) {
-            Spark.publish("motion", "0", TTL, PRIVATE);
-			mqttClient.publish("devices/trout/motion", "0");
+            Particle.publish("motion", "0", TTL, PRIVATE);
+			mqttClient.publish("devices/trout/motion", "inactive");
             motion = 0;
         }
         digitalWrite(LED, LOW);
@@ -112,11 +112,36 @@ void loopMotion() {
 // curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/tempc
 // curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/tempf
 
-int TMP36_SENSOR = A4;
+#define TMP36_SENSOR A4
+
 double tempc = 0.0;
 double tempf = 0.0;
 int tempraw = 0;
 int temp_debounce_time = 0;
+
+#define POOL_SIZE 10
+bool pool_initialized = false;
+int pool[POOL_SIZE];
+int pool_index = 0;
+int pool_total = 0;
+
+int smooth(int next) {
+    if (!pool_initialized) {
+        pool_initialized = true;
+        for (int i = 0; i < POOL_SIZE; i++) {
+            pool[i] = next;
+            pool_total += pool[i];
+        }
+        return next;
+    }
+    pool_total -= pool[pool_index];
+    pool[pool_index] = next;
+    pool_total += pool[pool_index];
+    if (++pool_index >= POOL_SIZE) {
+        pool_index = 0;
+    }
+    return pool_total / POOL_SIZE;
+}
 
 void setupTemperature() {
     Particle.variable("tempraw", &tempraw, INT);
@@ -127,17 +152,24 @@ void setupTemperature() {
 
 void loopTemperature() {
 	int now = Time.now();
-	if (now > temp_debounce_time) {
-		tempraw = analogRead(TMP36_SENSOR);
-		// The returned value from the Core is going to be in the range from 0 to 4095
-		// Calculate the voltage from the sensor reading
-		double c = (((tempraw * 3.3) / 4095) - 0.5) * 100;
-		// Convert C -> F
-		double f = (c * 9 / 5) + 32;
 
-		// Round to 1 decimal place
-		tempc = round(c*10)/10.0;
-		tempf = round(f*10)/10.0;
+	if (now > temp_debounce_time) {
+        int smoothed = smooth(analogRead(TMP36_SENSOR));
+        if (smoothed != tempraw) {
+            tempraw = smoothed;
+    		// The returned value from the Core is going to be in the range from 0 to 4095
+    		// Calculate the voltage from the sensor reading
+    		double c = (((tempraw * 3.3) / 4095) - 0.5) * 100;
+    		// Convert C -> F
+    		double f = (c * 9 / 5) + 32;
+
+    		// Round to 1 decimal place
+    		tempc = round(c*10)/10.0;
+    		tempf = round(f*10)/10.0;
+
+            Particle.publish("temperature", String(tempf), 0, PRIVATE);
+            mqttClient.publish("devices/trout/temperature", String(tempf));
+        }
 
 		temp_debounce_time = now + 5;
 	}

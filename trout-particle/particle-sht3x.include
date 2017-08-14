@@ -1,3 +1,3 @@
-trout.ino
+trout-sht3x.ino
 MQTT/src/MQTT.h
 MQTT/src/MQTT.cpp

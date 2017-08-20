@@ -58,31 +58,33 @@ void loopMqtt() {
 // curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/events
 
 #define TTL 5
-#define LED D0
-#define MOTION_SENSOR A0
+#define LED D7
+#define MOTION_SENSOR A1
+
+#define MOTION_DEBOUNCE_SECONDS 1
 
 int state = LOW;
 int reset_time = 0;
-int debounce_time = 0;
+int motion_debounce_time = 0;
 int motion = 0;
 
 void setupMotion() {
     pinMode(LED, OUTPUT);
     pinMode(MOTION_SENSOR, INPUT);
     digitalWrite(LED, state);
-    Particle.variable("motion", &motion, INT);
+    Particle.variable("motion", motion);
 }
 
 void loopMotion() {
 	int now = Time.now();
 
-	if (now > debounce_time) {
+	if (now > motion_debounce_time) {
 		int newstate = digitalRead(MOTION_SENSOR);
 		if (newstate != state) {
 			if (newstate == HIGH) {
 				reset_time = now + TTL;
 				if (motion == 0) {
-					Particle.publish("motion", "1", TTL, PRIVATE);
+					Particle.publish("motion", "active", TTL, PRIVATE);
 					mqttClient.publish("devices/trout/motion", "active");
 					motion = 1;
 				}
@@ -90,13 +92,13 @@ void loopMotion() {
 			}
 
 			state = newstate;
-			debounce_time = now + 1;
+			motion_debounce_time = now + MOTION_DEBOUNCE_SECONDS;
 		}
 	}
 
     if (now > reset_time) {
         if (motion == 1) {
-            Particle.publish("motion", "0", TTL, PRIVATE);
+            Particle.publish("motion", "inactive", TTL, PRIVATE);
 			mqttClient.publish("devices/trout/motion", "inactive");
             motion = 0;
         }
@@ -108,71 +110,81 @@ void loopMotion() {
 // TEMPERATURE:
 /////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Tests a TMP36 temperature sensor connected to A4
-// curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/tempc
-// curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/tempf
+// Tests a SHT3x temperature/humidity sensor connected to I2C on pins D0/D1
+// curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/temperature
+// curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/humidity
 
-#define TMP36_SENSOR A4
+#include "adafruit-sht31.h"
 
-double tempc = 0.0;
-double tempf = 0.0;
-int tempraw = 0;
-int temp_debounce_time = 0;
+Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
-#define POOL_SIZE 10
-bool pool_initialized = false;
-int pool[POOL_SIZE];
-int pool_index = 0;
-int pool_total = 0;
+#define SHT_DEBOUNCE_SECONDS 60
 
-int smooth(int next) {
-    if (!pool_initialized) {
-        pool_initialized = true;
-        for (int i = 0; i < POOL_SIZE; i++) {
-            pool[i] = next;
-            pool_total += pool[i];
-        }
-        return next;
-    }
-    pool_total -= pool[pool_index];
-    pool[pool_index] = next;
-    pool_total += pool[pool_index];
-    if (++pool_index >= POOL_SIZE) {
-        pool_index = 0;
-    }
-    return pool_total / POOL_SIZE;
-}
+char temperature[16];
+char humidity[16];
+
+int temperature10 = 0;
+int humidity10 = 0;
+int temperature_debounce_time = 0;
+int humidity_debounce_time = 0;
 
 void setupTemperature() {
-    Particle.variable("tempraw", &tempraw, INT);
-    Particle.variable("tempc", &tempc, DOUBLE);
-    Particle.variable("tempf", &tempf, DOUBLE);
-    pinMode(TMP36_SENSOR, INPUT);
+    Particle.variable("temperature", temperature);
+    Particle.variable("humidity", humidity);
+    sht31.begin(0x44);
+}
+
+// Rounds to the nearest tenth and stringifies a float into *buffer
+void round10(char* buffer, int size, float value) {
+    int v = (int) round(value * 10);
+    char *p = buffer + size;
+    *--p = '\0';
+    *--p = '0' + (v % 10);
+    *--p = '.';
+    do {
+        v /= 10;
+        *--p = '0' + (v % 10);
+    } while (v >= 10 && p > buffer);
+
+    while (*p != 0) {
+        *buffer++ = *p++;
+    }
 }
 
 void loopTemperature() {
-	int now = Time.now();
+    int now = Time.now();
 
-	if (now > temp_debounce_time) {
-        int smoothed = smooth(analogRead(TMP36_SENSOR));
-        if (smoothed != tempraw) {
-            tempraw = smoothed;
-    		// The returned value from the Core is going to be in the range from 0 to 4095
-    		// Calculate the voltage from the sensor reading
-    		double c = (((tempraw * 3.3) / 4095) - 0.5) * 100;
-    		// Convert C -> F
-    		double f = (c * 9 / 5) + 32;
+    if (now > temperature_debounce_time) {
+        float tC = sht31.readTemperature();
+        float tF = (tC * 9) / 5 + 32;
 
-    		// Round to 1 decimal place
-    		tempc = round(c*10)/10.0;
-    		tempf = round(f*10)/10.0;
-
-            Particle.publish("temperature", String(tempf), 0, PRIVATE);
-            mqttClient.publish("devices/trout/temperature", String(tempf));
+        if (!isnan(tF)) {
+            int tf10 = (int) round(tF * 10);
+            if (temperature10 != tf10) {
+                temperature10 = tf10;
+                round10(temperature, 16, tF);
+                Particle.publish("temperature", temperature, 0, PRIVATE);
+                mqttClient.publish("devices/trout/temperature", temperature);
+                temperature_debounce_time = now + SHT_DEBOUNCE_SECONDS;
+            }
         }
+    }
 
-		temp_debounce_time = now + 5;
-	}
+    if (now > humidity_debounce_time) {
+        float h = sht31.readHumidity();
+
+        if (!isnan(h)) {
+            int h10 = (int) round(h * 10);
+            if (humidity10 != h10) {
+                humidity10 = h10;
+                round10(humidity, 16, h);
+                Particle.publish("humidity", humidity, 0, PRIVATE);
+                mqttClient.publish("devices/trout/humidity", humidity);
+                humidity_debounce_time = now + SHT_DEBOUNCE_SECONDS;
+            }
+        }
+    }
+
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////

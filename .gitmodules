@@ -1,3 +1,6 @@
 [submodule "trout-particle/MQTT"]
 	path = trout-particle/MQTT
 	url = https://github.com/hirotakaster/MQTT.git
+[submodule "trout-particle/Adafruit_SHT31"]
+	path = trout-particle/Adafruit_SHT31
+	url = https://github.com/brolly759/Adafruit_SHT31.git

@@ -1,5 +1,5 @@
 trout-sht3x.ino
 MQTT/src/MQTT.h
 MQTT/src/MQTT.cpp
-adafruit-sht31/adafruit-sht31.h
-adafruit-sht31/adafruit-sht31.cpp
+Adafruit_SHT31/firmware/adafruit-sht31.h
+Adafruit_SHT31/firmware/adafruit-sht31.cpp

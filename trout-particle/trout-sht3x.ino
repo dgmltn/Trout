@@ -45,6 +45,32 @@ void loopMqtt() {
     }
 }
 
+void mqttPublishButtonState(boolean pressed) {
+    if (pressed) {
+        mqttClient.publish("cda/upstairs/bedroom1/rcbutton/state", (const uint8_t*)"pressed", 7, false);
+    }
+    else {
+        mqttClient.publish("cda/upstairs/bedroom1/rcbutton/state", (const uint8_t*)"unpressed", 9, true);
+    }
+}
+
+void mqttPublishMotion(boolean active) {
+    if (active) {
+        mqttClient.publish("cda/upstairs/bedroom1/motion", (const uint8_t*)"active", 6, false);
+    }
+    else {
+        mqttClient.publish("cda/upstairs/bedroom1/motion", (const uint8_t*)"inactive", 8, true);
+    }
+}
+
+void mqttPublishTemperature(char *temperature) {
+    mqttClient.publish("cda/upstairs/bedroom1/temperature", (const uint8_t*)temperature, strlen(temperature), true);
+}
+
+void mqttPublishHumidity(char *humidity) {
+    mqttClient.publish("cda/upstairs/bedroom1/humidity", (const uint8_t*)humidity, strlen(humidity), true);
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////
 // MOTION:
 /////////////////////////////////////////////////////////////////////////////////////////////
@@ -57,14 +83,14 @@ void loopMqtt() {
 // curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/<deviceid>/events/
 // curl -H "Authorization: Bearer <token>" https://api.spark.io/v1/devices/events
 
-#define TTL 5
+#define MOTION_TTL_SECONDS 5
 #define LED D7
 #define MOTION_SENSOR A1
 
 #define MOTION_DEBOUNCE_SECONDS 1
 
 int state = LOW;
-int reset_time = 0;
+int motion_reset_time = 0;
 int motion_debounce_time = 0;
 int motion = 0;
 
@@ -82,10 +108,10 @@ void loopMotion() {
 		int newstate = digitalRead(MOTION_SENSOR);
 		if (newstate != state) {
 			if (newstate == HIGH) {
-				reset_time = now + TTL;
+				motion_reset_time = now + MOTION_TTL_SECONDS;
 				if (motion == 0) {
-					Particle.publish("motion", "active", TTL, PRIVATE);
-					mqttClient.publish("devices/trout/motion", "active");
+					Particle.publish("motion", "active", MOTION_TTL_SECONDS, PRIVATE);
+                    mqttPublishMotion(true);
 					motion = 1;
 				}
 				digitalWrite(LED, HIGH);
@@ -96,13 +122,46 @@ void loopMotion() {
 		}
 	}
 
-    if (now > reset_time) {
+    if (now > motion_reset_time) {
         if (motion == 1) {
-            Particle.publish("motion", "inactive", TTL, PRIVATE);
-			mqttClient.publish("devices/trout/motion", "inactive");
+            Particle.publish("motion", "inactive", MOTION_TTL_SECONDS, PRIVATE);
+            mqttPublishMotion(false);
             motion = 0;
         }
-        digitalWrite(LED, LOW);
+//        digitalWrite(LED, LOW);
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////
+// REMOTE CONTROL:
+/////////////////////////////////////////////////////////////////////////////////////////////
+// Listens to a simple RC Receiver
+
+#define RCBUTTON_PIN D5
+
+#define RCBUTTON_DEBOUNCE_SECONDS 5
+
+int rcbutton = 0;
+int rcbutton_debounce_time = 0;
+
+void setupButton() {
+    pinMode(RCBUTTON_PIN, INPUT_PULLUP);
+    Particle.variable("rcbutton", rcbutton);
+}
+
+void loopButton() {
+    int now = Time.now();
+
+	if (now > rcbutton_debounce_time) {
+        int newRcbutton = !digitalRead(RCBUTTON_PIN);
+        if (newRcbutton != rcbutton) {
+            rcbutton = newRcbutton;
+            rcbutton_debounce_time = now + RCBUTTON_DEBOUNCE_SECONDS;
+            const char* state = rcbutton ? "on" : "off";
+            Particle.publish("rcbutton", state, RCBUTTON_DEBOUNCE_SECONDS, PRIVATE);
+            mqttPublishButtonState(rcbutton);
+        }
+        digitalWrite(LED, rcbutton);
     }
 }
 
@@ -164,7 +223,7 @@ void loopTemperature() {
                 temperature10 = tf10;
                 round10(temperature, 16, tF);
                 Particle.publish("temperature", temperature, 0, PRIVATE);
-                mqttClient.publish("devices/trout/temperature", temperature);
+                mqttPublishTemperature(temperature);
                 temperature_debounce_time = now + SHT_DEBOUNCE_SECONDS;
             }
         }
@@ -179,7 +238,7 @@ void loopTemperature() {
                 humidity10 = h10;
                 round10(humidity, 16, h);
                 Particle.publish("humidity", humidity, 0, PRIVATE);
-                mqttClient.publish("devices/trout/humidity", humidity);
+                mqttPublishHumidity(humidity);
                 humidity_debounce_time = now + SHT_DEBOUNCE_SECONDS;
             }
         }
@@ -193,10 +252,12 @@ void setup() {
 	setupMqtt();
     setupMotion();
     setupTemperature();
+    setupButton();
 }
 
 void loop() {
 	loopMqtt();
     loopMotion();
     loopTemperature();
+    loopButton();
 }

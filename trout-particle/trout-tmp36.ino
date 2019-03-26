@@ -9,7 +9,7 @@
 /////////////////////////////////////////////////////////////////////////////////////////////
 
 char myIpString[24];
-byte server[] = { 10, 5, 23, 34 };
+byte server[] = { 10, 5, 23, 6 };
 
 MQTT mqttClient(server, 1883, mqttCallback);
 int mqtt_status = 0;

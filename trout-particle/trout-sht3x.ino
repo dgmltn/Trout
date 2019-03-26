@@ -9,7 +9,7 @@
 /////////////////////////////////////////////////////////////////////////////////////////////
 
 char myIpString[24];
-byte server[] = { 10, 5, 23, 34 };
+byte server[] = { 10, 5, 23, 6 };
 
 MQTT mqttClient(server, 1883, mqttCallback);
 int mqtt_status = 0;
@@ -17,7 +17,7 @@ int mqtt_status = 0;
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     char p[length + 1];
     memcpy(p, payload, length);
-    p[length] = '\0';
+    p[length] = NULL;
     String message(p);
 
     //Do something with String message?
